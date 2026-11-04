@@ -1,6 +1,6 @@
 # Instruction Conflict Sim
 
-> Built with Claude. The research question, experiment design and conclusions are my own; Claude assisted with the code.
+> Built with Claude Code. The research question, experiment design and conclusions are my own; Claude assisted with the code.
 
 ## Research question
 
@@ -126,6 +126,8 @@ Pilot settings, recorded for reproducibility: thinking params left at the API de
 5.5 that is adaptive thinking at `medium` effort, thinking text not returned), `max_tokens` 600,
 only the reply text kept in the history, no caching, 1 seed. One reply was empty after spending
 all 600 output tokens, most likely on thinking; ~70% of replies (42/60) hit the 600-token limit.
+One record (first-message arm, turn 14, an empty reply) was re-scored with the current detector:
+empty replies count as no evidence rather than compliant.
 Cost: about $0.06.
 
 ### 1c - main run (Haiku 5.5, 276 runs)
