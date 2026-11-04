@@ -1,0 +1,11 @@
+# Pipeline smoke test - no API key needed, numbers are meaningless.
+name: mock_smoke
+rule: {text: "你必须只用中文回答。", check: zh}
+models: [mock]
+rule_placements: [system, first_user]
+user_langs: [en]
+user_turns: {en: prompts/turns_en.txt}
+n_turns: 30
+seeds: 20
+shuffle_turns: true
+stop_at_first_violation: false

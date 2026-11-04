@@ -1,0 +1,142 @@
+# DRAFT coding tasks (English). Separate tasks with a line containing only =====
+# Lines starting with # are ignored. All tasks refer to the fake project in project_md_draft.md.
+Training crashes after ~3k steps with this error. What's going on and how do I fix it?
+
+```
+File "pipeline/dataset/synth_dataset.py", line 58, in __getitem__
+    label = cv2.imread(str(self.root / rec["label"]), cv2.IMREAD_UNCHANGED)[y:y+s, x:x+s]
+TypeError: 'NoneType' object is not subscriptable
+```
+
+```python
+def __getitem__(self, idx):
+    rec = self.records[idx]
+    rgb = cv2.imread(str(self.root / rec["rgb"]))[:, :, ::-1]
+    s = self.crop
+    y = random.randint(0, rgb.shape[0] - s)
+    x = random.randint(0, rgb.shape[1] - s)
+    label = cv2.imread(str(self.root / rec["label"]), cv2.IMREAD_UNCHANGED)[y:y+s, x:x+s]
+    return self.tf(rgb[y:y+s, x:x+s]), torch.from_numpy(label).long()
+```
+=====
+Our thin-structure recall drops from 0.71 to 0.48 when we evaluate at 0.5x resolution. Design an evaluation change that measures thin lane lines fairly without making eval much slower. Explain the trade-offs.
+=====
+Refactor this function. It's too long and hard to test. Keep behaviour identical.
+
+```python
+def convert(raw_dir, out_dir, cams=None, skip_rain=False, min_line_px=0, verbose=False):
+    import os, json, cv2
+    recs = []
+    for f in sorted(os.listdir(raw_dir)):
+        if not f.endswith("_rgb.png"): continue
+        sid = f.split("_")[0]
+        cam = f.split("_")[1]
+        if cams and cam not in cams: continue
+        meta = json.load(open(raw_dir + "/" + sid + "_meta.json"))
+        if skip_rain and meta["weather"] == "rain": continue
+        lab = cv2.imread(raw_dir + "/" + sid + "_" + cam + "_stencil.png", 0)
+        lab2 = lab.copy()
+        for k, v in {1: 3, 2: 4, 7: 5, 9: 255}.items(): lab2[lab == k] = v
+        if min_line_px and (lab2 == 3).sum() < min_line_px: continue
+        cv2.imwrite(out_dir + "/label/" + sid + ".png", lab2)
+        os.system("cp " + raw_dir + "/" + f + " " + out_dir + "/rgb/" + sid + ".png")
+        recs.append({"id": sid, "camera": cam, **meta})
+        if verbose: print("ok", sid)
+    with open(out_dir + "/manifest.jsonl", "w") as fh:
+        for r in recs: fh.write(json.dumps(r) + "\n")
+    return len(recs)
+```
+=====
+Why does this loss go to NaN only when batch size is 1?
+
+```python
+def boundary_loss(logits, target, ignore=255):
+    valid = target != ignore
+    edges = sobel(target.float()) > 0
+    w = edges.float() / edges.float().sum(dim=(1, 2), keepdim=True)
+    ce = F.cross_entropy(logits, target, ignore_index=ignore, reduction="none")
+    return (ce * w * valid).sum() / valid.sum()
+```
+=====
+We want to add a "fog density" parameter to the randomizer and log it in the manifest. List every file that needs to change and show the Python-side changes.
+=====
+compare_real.py takes more than 20 minutes because it recomputes features for the real set every time. Propose a caching design. It must stay correct if the real set changes or the feature extractor changes.
+=====
+Review this PR diff and tell me what you'd block on.
+
+```diff
+- def load_manifest(path: str):
+-     return [json.loads(l) for l in open(path)]
++ def load_manifest(path, version=None):
++     recs = [json.loads(l) for l in open(path)]
++     if version:
++         recs = [r for r in recs if r.get("version", 0) >= version]
++     print(f"loaded {len(recs)} records")
++     return recs
+```
+=====
+Rain particles leak into the label pass as background (class 0) instead of ignore (255). Where would you fix this — in UE5, in the converter, or in the dataset loader? Argue for one.
+=====
+This DataLoader is slow; GPU utilisation is ~35%. What would you check first, in order?
+
+```python
+loader = DataLoader(ds, batch_size=8, shuffle=True, num_workers=0,
+                    collate_fn=lambda b: (torch.stack([x for x, _ in b]),
+                                          torch.stack([y for _, y in b])))
+```
+=====
+Write a pytest for `manifest.py` that checks old version-3 manifests are migrated correctly to version 4 (version 4 added `sun_elevation`, default 45.0).
+=====
+The mIoU on synthetic val is 0.82 but on real data it's 0.41. Give me a structured plan for diagnosing the sim-to-real gap, using only what this repo already has.
+=====
+Is there a bug here? Training on 2 GPUs gives different class weights than on 1 GPU.
+
+```python
+def compute_class_weights(loader, n_cls):
+    counts = torch.zeros(n_cls)
+    for _, y in loader:
+        y = y[y != 255]
+        counts += torch.bincount(y.flatten(), minlength=n_cls)
+    w = 1.0 / torch.log(1.02 + counts / counts.sum())
+    return w
+```
+=====
+Design the interface for a plugin system so other teams can add new label passes (e.g. depth, instance ids) without editing CaptureActor.cpp. Sketch the C++ side and the Python side.
+=====
+Export fails on Windows with `FileNotFoundError` for paths like `D:/data/synth_out/2026-10-31_rain_heavy_cam02_sunlow/raw/000123_cam_02_stencil.png`. The file exists. What's happening and what's the cleanest fix?
+=====
+Our hydra config has grown to 14 files and people keep overriding the wrong crop size. Suggest a restructuring and show the new tree.
+=====
+This augmentation sometimes makes lane lines disappear completely. Why?
+
+```python
+def random_scale(img, lab, lo=0.5, hi=1.5):
+    s = random.uniform(lo, hi)
+    h, w = lab.shape
+    img = cv2.resize(img, (int(w * s), int(h * s)))
+    lab = cv2.resize(lab, (int(w * s), int(h * s)))
+    return img, lab
+```
+=====
+We need to decide between generating 200k images at 1080p or 50k images at 4K for the next training round. Same GPU budget. How would you decide, and what experiment would you run first?
+=====
+Rewrite `metrics.py`'s boundary F1 so it is vectorised. Current version loops over images and classes in Python and takes 9 minutes on the val set.
+
+```python
+def boundary_f1(preds, gts, n_cls, tol=2):
+    scores = []
+    for p, g in zip(preds, gts):
+        for c in range(n_cls):
+            pb = find_boundaries(p == c)
+            gb = find_boundaries(g == c)
+            if gb.sum() == 0: continue
+            pd = distance_transform_edt(~pb); gd = distance_transform_edt(~gb)
+            prec = (gd[pb] <= tol).mean() if pb.any() else 0
+            rec = (pd[gb] <= tol).mean()
+            scores.append(0 if prec + rec == 0 else 2 * prec * rec / (prec + rec))
+    return float(np.mean(scores))
+```
+=====
+A teammate wants to move class-id definitions into the UE5 config so artists can edit them. The CLAUDE.md says class ids live only in classes.py. What would you recommend?
+=====
+Summarise everything we've changed or decided in this conversation as a changelog entry for docs/dataset_changes.md.

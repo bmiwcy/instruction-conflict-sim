@@ -1,0 +1,10 @@
+# secrets
+.env
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+# pipeline-check outputs (mock model), logs
+results/mock_*
+figures/mock_*
+results/*.log

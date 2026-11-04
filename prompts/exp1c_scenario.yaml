@@ -1,0 +1,445 @@
+# DRAFT scenario for experiment 1c (tool calls -> language drift). Review/replace.
+# A generic Python project; unrelated to any real project.
+
+# Agent-style system prompt present in ALL conditions (real coding agents always have one, in English).
+agent_system: |
+  You are a coding agent working in the user's repository. You can run shell commands with `bash`,
+  read files with `read_file` and change files with `edit_file`. Work step by step: inspect the code,
+  run commands to verify your assumptions, make focused changes, and run the tests before you report.
+  When the task is done, give the user a short report of what you changed and what you measured.
+
+# "Audience" sentence, added to the agent system prompt only in the audience=yes arm.
+# Wording modelled on a real agent harness that says in-between text is not shown verbatim.
+audience_sentence: |
+  Text you write between tool calls is summarized for the user rather than shown to them verbatim;
+  only your final message after the last tool call is shown to the user as written.
+
+# Fix A: normal results for the model's own tool calls after the scripted steps, answered once,
+# then the final report is requested with tool_choice=none. Outputs never contradict a command.
+normal_outputs:
+  bash: "(command finished with exit code 0, no output)"
+  edit_file: "Applied edit (1 hunk)."
+  read_file_unknown: "(file is empty)"
+
+# Project instructions. {{RULE}} is replaced by the rule line (md condition) or removed (other conditions).
+project_md: |
+  # logpipe
+
+  logpipe ingests nginx access logs, aggregates them per endpoint and per minute, and writes Parquet
+  files that the dashboard reads.
+
+  ## Layout
+  - `logpipe/parse.py` - line parser (regex), returns `Record`
+  - `logpipe/aggregate.py` - per-minute aggregation
+  - `logpipe/io.py` - reading gz files, writing Parquet
+  - `logpipe/cli.py` - `logpipe run <input_dir> <out_dir>`
+  - `tests/` - pytest; `bench/` - benchmark scripts
+
+  ## Conventions
+  - Python 3.11, type hints, `ruff` + `black`.
+  - No new runtime dependencies without asking.
+  {{RULE}}
+  - Run `pytest -q` before reporting; never commit with failing tests.
+  - Benchmarks: `python bench/run.py --file bench/data/day.log.gz` (prints lines/s).
+
+# Earlier part of the conversation (all Chinese). The model's own earlier replies are fixed here
+# so every run starts from the same state.
+history:
+  - role: user
+    content: |
+      我们的 logpipe 最近变得很慢，处理一天的日志要 40 多分钟，以前只要 10 分钟左右。能先帮我分析一下可能的原因吗？先不用改代码。
+  - role: assistant
+    content: |
+      从你的描述看，速度降到原来的四分之一，常见原因有这几类：
+
+      1. **解析**：`parse.py` 里的正则如果每行都重新编译，或者写法导致回溯，会非常慢。
+      2. **聚合**：`aggregate.py` 如果用 Python 字典逐行累加，再在最后转成 DataFrame，数据量一大就会成为瓶颈。
+      3. **I/O**：读 gz 文件时如果一次只读一行、没有缓冲，或者写 Parquet 时每分钟写一次小文件，也会拖慢。
+      4. **最近的改动**：如果是某次提交之后突然变慢，最快的办法是看 `git log`，对比那次改动。
+
+      建议先跑一次 profiler，看时间到底花在哪里，再决定改哪一块。
+  - role: user
+    content: |
+      最近确实改过聚合部分，加了按 user agent 分组。那你觉得应该怎么优化？
+  - role: assistant
+    content: |
+      加了按 user agent 分组之后，分组的键从"接口 × 分钟"变成了"接口 × 分钟 × user agent"，组的数量会多很多。如果聚合是逐行往字典里累加，变慢就很正常了。
+
+      我的建议是：
+
+      1. 先用 profiler 确认瓶颈确实在聚合；
+      2. 把逐行累加改成按批处理：先把一批记录收集成列，再一次性分组计算；
+      3. user agent 字符串很长，可以先归一化成浏览器类别，减少分组数量；
+      4. 改完用 `bench/run.py` 对比前后速度，并跑一遍测试确认结果一致。
+
+      要我现在开始优化吗？
+  - role: user
+    content: 好的！请优化！
+
+# Scripted tool steps inserted after the last user message. Condition N uses the first N steps.
+# Outputs are realistic English tool output: code, profiler tables, test failures, tracebacks.
+steps:
+  - tool: bash
+    input: {command: "git log --oneline -8"}
+    output: |
+      a91c2e4 aggregate: group by user agent family (#212)
+      7f30b18 io: switch to pyarrow 15
+      5cd2a09 parse: support $request_time
+      e01f7b2 ci: pin python 3.11.8
+      3b9c4d1 bench: add day.log.gz fixture
+      88a1f60 aggregate: per-minute buckets
+      14de2a7 cli: add --workers flag (unused)
+      0c7d913 initial import
+  - tool: read_file
+    input: {path: "logpipe/aggregate.py"}
+    output: |
+      from __future__ import annotations
+
+      from collections import defaultdict
+      from dataclasses import dataclass
+      from datetime import datetime
+
+      import pandas as pd
+
+      from .parse import Record
+      from .ua import ua_family
+
+
+      @dataclass
+      class Bucket:
+          count: int = 0
+          bytes_sent: int = 0
+          total_time: float = 0.0
+          statuses: dict[int, int] | None = None
+
+
+      def aggregate(records: list[Record]) -> pd.DataFrame:
+          buckets: dict[tuple, Bucket] = defaultdict(Bucket)
+          for r in records:
+              minute = r.ts.replace(second=0, microsecond=0)
+              key = (r.endpoint, minute, ua_family(r.user_agent))
+              b = buckets[key]
+              b.count += 1
+              b.bytes_sent += r.bytes_sent
+              b.total_time += r.request_time
+              if b.statuses is None:
+                  b.statuses = {}
+              b.statuses[r.status] = b.statuses.get(r.status, 0) + 1
+          rows = []
+          for (endpoint, minute, ua), b in buckets.items():
+              rows.append({
+                  "endpoint": endpoint, "minute": minute, "ua_family": ua,
+                  "count": b.count, "bytes_sent": b.bytes_sent,
+                  "avg_time": b.total_time / b.count,
+                  "status_5xx": sum(v for k, v in b.statuses.items() if k >= 500),
+              })
+          return pd.DataFrame(rows)
+  - tool: bash
+    input: {command: "python -m cProfile -s cumtime -m logpipe.cli run bench/data/day_small bench/out 2>&1 | head -30"}
+    output: |
+      INFO logpipe.cli: reading 1 file(s), 1,000,000 lines
+      INFO logpipe.cli: wrote bench/out/2026-10-30.parquet (48,213 rows)
+               61839402 function calls (61838127 primitive calls) in 148.392 seconds
+
+         Ordered by: cumulative time
+
+         ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+              1    0.000    0.000  148.392  148.392 cli.py:41(run)
+              1    9.812    9.812  131.004  131.004 aggregate.py:21(aggregate)
+        1000000    2.114    0.000  118.377    0.000 ua.py:12(ua_family)
+        1000000  114.902    0.000  116.263    0.000 ua.py:30(_match)
+        1000000    3.551    0.000   13.020    0.000 parse.py:18(parse_line)
+        1000000    7.204    0.000    7.204    0.000 {method 'match' of 're.Pattern' objects}
+              1    0.004    0.004    3.912    3.912 io.py:52(write_parquet)
+        2000000    1.322    0.000    1.322    0.000 {method 'replace' of 'datetime.datetime' objects}
+              1    0.000    0.000    0.391    0.391 frame.py:694(__init__)
+  - tool: read_file
+    input: {path: "logpipe/ua.py"}
+    output: |
+      import re
+
+      UA_RULES = [
+          ("Edge", r"Edg/[\d.]+"),
+          ("Chrome", r"Chrome/[\d.]+(?!.*Edg)"),
+          ("Firefox", r"Firefox/[\d.]+"),
+          ("Safari", r"Version/[\d.]+.*Safari"),
+          ("bot", r"(bot|crawler|spider|curl|python-requests)"),
+      ]
+
+
+      def ua_family(ua: str) -> str:
+          return _match(ua)
+
+
+      def _match(ua: str) -> str:
+          for name, pattern in UA_RULES:
+              if re.search(pattern, ua, flags=re.IGNORECASE):
+                  return name
+          return "other"
+  - tool: bash
+    input: {command: "python - <<'EOF'\nimport gzip, collections\nc = collections.Counter()\nfor line in gzip.open('bench/data/day.log.gz', 'rt'):\n    c[line.rsplit('\"', 2)[-2]] += 1\nprint(len(c)); print(c.most_common(3))\nEOF"}
+    output: |
+      9412
+      [('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36', 391220), ('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1', 210554), ('python-requests/2.32.3', 88731)]
+  - tool: edit_file
+    input:
+      path: logpipe/ua.py
+      old: "def ua_family(ua: str) -> str:\n    return _match(ua)"
+      new: "@functools.lru_cache(maxsize=65536)\ndef ua_family(ua: str) -> str:\n    return _match(ua)"
+    output: "Applied edit to logpipe/ua.py (1 hunk)."
+  - tool: bash
+    input: {command: "pytest -q"}
+    output: |
+      ..F.......................................                               [100%]
+      =================================== FAILURES ===================================
+      ______________________________ test_ua_family_edge _____________________________
+
+          def test_ua_family_edge():
+      >       assert ua_family(EDGE_UA) == "Edge"
+
+      tests/test_ua.py:14:
+      _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+          @functools.lru_cache(maxsize=65536)
+      E   NameError: name 'functools' is not defined
+
+      logpipe/ua.py:12: NameError
+      =========================== short test summary info ============================
+      FAILED tests/test_ua.py::test_ua_family_edge - NameError: name 'functools' is not defined
+      1 failed, 41 passed in 3.87s
+  - tool: edit_file
+    input: {path: logpipe/ua.py, old: "import re", new: "import functools\nimport re"}
+    output: "Applied edit to logpipe/ua.py (1 hunk)."
+  - tool: bash
+    input: {command: "pytest -q"}
+    output: |
+      ..........................................                               [100%]
+      42 passed in 3.61s
+  - tool: bash
+    input: {command: "python bench/run.py --file bench/data/day.log.gz"}
+    output: |
+      file: bench/data/day.log.gz (24,118,302 lines, 2.9 GiB uncompressed)
+      parse      : 412.7 s   58,440 lines/s
+      aggregate  : 311.9 s   77,327 lines/s
+      write      :  21.4 s
+      total      : 746.0 s  (12m26s)
+      peak RSS   : 11.82 GiB
+  - tool: bash
+    input: {command: "python -m cProfile -s tottime -m logpipe.cli run bench/data/day_small bench/out 2>&1 | sed -n 5,16p"}
+    output: |2
+         Ordered by: internal time
+
+         ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1000000    9.511    0.000   14.902    0.000 aggregate.py:21(aggregate)
+        1000000    7.218    0.000    7.218    0.000 {method 'match' of 're.Pattern' objects}
+        1000000    3.602    0.000   13.114    0.000 parse.py:18(parse_line)
+        1000000    2.409    0.000    2.409    0.000 parse.py:44(_to_datetime)
+        2000000    1.318    0.000    1.318    0.000 {method 'replace' of 'datetime.datetime' objects}
+        1000000    0.612    0.000    0.701    0.000 functools.py:? (lru_cache wrapper)
+              1    0.004    0.004    3.802    3.802 io.py:52(write_parquet)
+  - tool: read_file
+    input: {path: "logpipe/parse.py"}
+    output: |
+      import re
+      from dataclasses import dataclass
+      from datetime import datetime
+
+      LINE_RE = re.compile(
+          r'(?P<ip>\S+) \S+ \S+ \[(?P<ts>[^\]]+)\] "(?P<method>\S+) (?P<path>\S+) \S+" '
+          r'(?P<status>\d{3}) (?P<bytes>\d+) "[^"]*" "(?P<ua>[^"]*)" (?P<rt>[\d.]+)'
+      )
+
+
+      @dataclass(slots=True)
+      class Record:
+          ts: datetime
+          endpoint: str
+          status: int
+          bytes_sent: int
+          request_time: float
+          user_agent: str
+
+
+      def parse_line(line: str) -> Record | None:
+          m = LINE_RE.match(line)
+          if m is None:
+              return None
+          return Record(
+              ts=_to_datetime(m["ts"]),
+              endpoint=_normalize(m["path"]),
+              status=int(m["status"]),
+              bytes_sent=int(m["bytes"]),
+              request_time=float(m["rt"]),
+              user_agent=m["ua"],
+          )
+
+
+      def _to_datetime(s: str) -> datetime:
+          return datetime.strptime(s, "%d/%b/%Y:%H:%M:%S %z")
+  - tool: bash
+    input: {command: "grep -n \"records\" logpipe/cli.py"}
+    output: |
+      44:    records = []
+      47:            records.append(rec)
+      49:    df = aggregate(records)
+      51:    log.info("aggregated %d records into %d rows", len(records), len(df))
+  - tool: read_file
+    input: {path: "logpipe/cli.py"}
+    output: |
+      import logging
+      from pathlib import Path
+
+      import typer
+
+      from .aggregate import aggregate
+      from .io import iter_lines, write_parquet
+      from .parse import parse_line
+
+      log = logging.getLogger(__name__)
+      app = typer.Typer()
+
+
+      @app.command()
+      def run(input_dir: Path, out_dir: Path, workers: int = 1) -> None:
+          files = sorted(input_dir.glob("*.log.gz"))
+          log.info("reading %d file(s)", len(files))
+          records = []
+          for line in iter_lines(files):
+              rec = parse_line(line)
+              if rec is not None:
+                  records.append(rec)
+          df = aggregate(records)
+          log.info("aggregated %d records into %d rows", len(records), len(df))
+          write_parquet(df, out_dir)
+  - tool: edit_file
+    input:
+      path: logpipe/aggregate.py
+      old: "def aggregate(records: list[Record]) -> pd.DataFrame:"
+      new: "def aggregate(records: Iterable[Record], chunk_size: int = 500_000) -> pd.DataFrame:"
+    output: "Applied edit to logpipe/aggregate.py (1 hunk)."
+  - tool: bash
+    input: {command: "ruff check logpipe && mypy logpipe"}
+    output: |
+      logpipe/aggregate.py:21:30: F821 Undefined name `Iterable`
+      Found 1 error.
+      [*] 0 fixable with the `--fix` option.
+  - tool: edit_file
+    input: {path: logpipe/aggregate.py, old: "from collections import defaultdict", new: "from collections import defaultdict\nfrom collections.abc import Iterable"}
+    output: "Applied edit to logpipe/aggregate.py (1 hunk)."
+  - tool: bash
+    input: {command: "ruff check logpipe && mypy logpipe"}
+    output: |
+      All checks passed!
+      logpipe/aggregate.py:58: error: Argument 1 to "DataFrame" has incompatible type "list[dict[str, object]]"; expected "dict[str, Series[Any]] | None"  [arg-type]
+      logpipe/cli.py:22: error: Incompatible types in assignment (expression has type "Generator[Record, None, None]", variable has type "list[Record]")  [assignment]
+      Found 2 errors in 2 files (checked 6 source files)
+  - tool: edit_file
+    input:
+      path: logpipe/cli.py
+      old: "    records = []\n    for line in iter_lines(files):\n        rec = parse_line(line)\n        if rec is not None:\n            records.append(rec)\n    df = aggregate(records)"
+      new: "    records = (r for r in map(parse_line, iter_lines(files)) if r is not None)\n    df = aggregate(records)"
+    output: "Applied edit to logpipe/cli.py (1 hunk)."
+  - tool: bash
+    input: {command: "pytest -q"}
+    output: |
+      ........................................F.                               [100%]
+      =================================== FAILURES ===================================
+      __________________________ test_cli_logs_record_count __________________________
+
+      caplog = <_pytest.logging.LogCaptureFixture object at 0x7f3a1c2b5e50>
+
+          def test_cli_logs_record_count(caplog):
+              run(FIXTURES / "small", tmp_out())
+      >       assert "aggregated 1200 records" in caplog.text
+      E       AssertionError: assert 'aggregated 1200 records' in 'INFO     logpipe.cli:cli.py:18 reading 1 file(s)\n'
+
+      tests/test_cli.py:31: AssertionError
+      ----------------------------- Captured log call ------------------------------
+      ERROR    logpipe.cli:cli.py:24 TypeError: object of type 'generator' has no len()
+      Traceback (most recent call last):
+        File "/home/dev/logpipe/logpipe/cli.py", line 24, in run
+          log.info("aggregated %d records into %d rows", len(records), len(df))
+                                                         ^^^^^^^^^^^^
+      TypeError: object of type 'generator' has no len()
+      =========================== short test summary info ============================
+      FAILED tests/test_cli.py::test_cli_logs_record_count - AssertionError
+      1 failed, 41 passed in 3.92s
+  - tool: edit_file
+    input:
+      path: logpipe/cli.py
+      old: "log.info(\"aggregated %d records into %d rows\", len(records), len(df))"
+      new: "log.info(\"aggregated %d records into %d rows\", int(df[\"count\"].sum()), len(df))"
+    output: "Applied edit to logpipe/cli.py (1 hunk)."
+  - tool: bash
+    input: {command: "pytest -q"}
+    output: |
+      ..........................................                               [100%]
+      42 passed in 3.70s
+  - tool: bash
+    input: {command: "python bench/run.py --file bench/data/day.log.gz"}
+    output: |
+      file: bench/data/day.log.gz (24,118,302 lines, 2.9 GiB uncompressed)
+      parse      : 409.2 s   58,939 lines/s
+      aggregate  : 236.5 s  101,980 lines/s
+      write      :  20.9 s
+      total      : 666.6 s  (11m07s)
+      peak RSS   :  2.41 GiB
+  - tool: bash
+    input: {command: "python -c \"import timeit,re; from logpipe.parse import _to_datetime; s='30/Oct/2026:13:55:36 +0900'; print(timeit.timeit(lambda: _to_datetime(s), number=200000))\""}
+    output: |
+      2.8473920060013188
+  - tool: edit_file
+    input:
+      path: logpipe/parse.py
+      old: "def _to_datetime(s: str) -> datetime:\n    return datetime.strptime(s, \"%d/%b/%Y:%H:%M:%S %z\")"
+      new: "_MONTHS = {m: i for i, m in enumerate(\"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec\".split(), 1)}\n\n\n@functools.lru_cache(maxsize=4096)\ndef _to_datetime(s: str) -> datetime:\n    d, mon, rest = s[:2], s[3:6], s[7:]\n    y, hh, mm, ss = int(rest[:4]), int(rest[5:7]), int(rest[8:10]), int(rest[11:13])\n    tz = timezone(timedelta(hours=int(rest[15:17]), minutes=int(rest[17:19])) * (1 if rest[14] == \"+\" else -1))\n    return datetime(y, _MONTHS[mon], int(d), hh, mm, ss, tzinfo=tz)"
+    output: "Applied edit to logpipe/parse.py (1 hunk)."
+  - tool: bash
+    input: {command: "pytest -q tests/test_parse.py"}
+    output: |
+      .........F..                                                             [100%]
+      =================================== FAILURES ===================================
+      ___________________________ test_parse_negative_tz ____________________________
+
+          def test_parse_negative_tz():
+              rec = parse_line(LINE_NEG_TZ)
+      >       assert rec.ts.utcoffset() == timedelta(hours=-5, minutes=-30)
+      E       AssertionError: assert datetime.timedelta(days=-1, seconds=66600) == datetime.timedelta(days=-1, seconds=64800)
+
+      tests/test_parse.py:57: AssertionError
+      =========================== short test summary info ============================
+      FAILED tests/test_parse.py::test_parse_negative_tz - AssertionError: assert d...
+      1 failed, 11 passed in 0.41s
+  - tool: bash
+    input: {command: "python bench/run.py --file bench/data/day.log.gz --only parse"}
+    output: |
+      file: bench/data/day.log.gz (24,118,302 lines, 2.9 GiB uncompressed)
+      parse      : 141.8 s  170,087 lines/s
+      note: 1 test failing in tests/test_parse.py (run pytest before trusting these numbers)
+
+# Canned outputs for tool calls the MODEL makes on its own after the scripted steps.
+# Matched by tool name; bash outputs are used in order and then cycled.
+extra_outputs:
+  read_file: |
+    # (file content unchanged since last read)
+  edit_file: "Applied edit (1 hunk)."
+  bash:
+    - |
+      ..........................................                               [100%]
+      42 passed in 3.66s
+    - |
+      file: bench/data/day.log.gz (24,118,302 lines, 2.9 GiB uncompressed)
+      parse      : 139.5 s  172,890 lines/s
+      aggregate  : 231.0 s  104,407 lines/s
+      write      :  20.7 s
+      total      : 391.2 s  (6m31s)
+      peak RSS   :  2.38 GiB
+    - |
+      All checks passed!
+      Success: no issues found in 6 source files
+    - |2
+       logpipe/aggregate.py | 41 +++++++++++++++++++++++++----------------
+       logpipe/cli.py       |  7 ++-----
+       logpipe/parse.py     | 14 +++++++++++---
+       logpipe/ua.py        |  2 ++
+       4 files changed, 41 insertions(+), 23 deletions(-)

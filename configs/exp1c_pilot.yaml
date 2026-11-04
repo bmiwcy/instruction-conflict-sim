@@ -1,0 +1,16 @@
+# Exp 1c pilot: user speaks Chinese throughout; N English tool steps before the model speaks again.
+name: exp1c_pilot
+runner: exp1c
+scenario: prompts/exp1c_scenario.yaml
+rule:
+  check: zh
+  system_text: "回答必须用中文。"
+  md_line: "- 回答必须用中文。"
+models: [claude-haiku-5-5]
+rule_conds: [none, md, system]
+n_tools: [0, 5, 10, 25]
+seeds: 3
+thinking_level: default      # adaptive thinking at the model's default effort, summary returned
+max_extra_calls: 10          # model's own tool calls after the scripted steps; then a report is forced
+max_tokens: 32000
+cache: true

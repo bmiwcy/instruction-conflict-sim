@@ -1,0 +1,26 @@
+# Experiment 1 - language drift.  Every value marked DECIDE is a design choice for you.
+name: exp1_language_drift
+
+rule:
+  text: "无论我用什么语言提问，你都必须只用中文回答。"   # DECIDE: exact wording
+  check: zh                                             # see ics/detect.py
+
+models:            # DECIDE: which models
+  - claude-haiku-5-5
+  - claude-sonnet-5-5
+  # - claude-opus-5-5
+
+rule_placements: [system, first_user]   # DECIDE: where the rule lives
+user_langs: [en, ja, zh]                # DECIDE: language of user turns (zh = control)
+user_turns:
+  en: prompts/turns_en.txt
+  zh: prompts/turns_zh.txt
+  ja: prompts/turns_ja.txt
+
+n_turns: 30          # DECIDE
+seeds: 5             # runs per condition; DECIDE (cost scales linearly)
+
+max_tokens: 600
+shuffle_turns: true  # each seed sees the turns in a different order
+stop_at_first_violation: false   # false = keep going, lets you see recovery after drift
+base_system: null    # system prompt used when the rule is NOT in the system slot

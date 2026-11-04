@@ -1,0 +1,19 @@
+# Top-up for exp1c_haiku: "md in user message, no rule" at 0 and 5 tool steps, 10 runs per cell.
+# Writes into the same results file (name: exp1c_haiku); seeds 0-2 already exist and are skipped.
+name: exp1c_haiku
+runner: exp1c
+scenario: prompts/exp1c_scenario.yaml
+rule:
+  check: zh
+  system_text: "回答必须用中文。"
+  md_line: "- 回答必须用中文。"
+models: [claude-haiku-5-5]
+rule_conds: [none]
+audience: ["no", "yes"]
+n_tools: [0, 5]
+seeds_by_n: {0: 10, 5: 10}
+thinking_level: default
+empty_retries: 0
+max_tokens: 32000
+cache: true
+workers: 6

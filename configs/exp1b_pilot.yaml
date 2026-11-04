@@ -1,0 +1,21 @@
+# Exp 1b pilot: the condition most likely to drift (md rule + high thinking + coding tasks).
+name: exp1b_pilot
+runner: exp1b
+rule:
+  check: zh
+  system_text: "回答必须用中文。"          # used when placement = system
+  md_line: "- 回答必须用中文。"            # replaces {{RULE}} in the project md
+project_md: prompts/project_md_draft.md
+tasks:
+  qa: prompts/turns_en.txt
+  coding: prompts/tasks_coding_en_draft.txt
+models: [claude-haiku-5-5]
+rule_placements: [md]
+thinking_levels: [high]
+task_kinds: [coding]
+n_turns: 20
+seeds: 1
+max_tokens: 64000
+cache: true
+shuffle_tasks: true
+stop_at_first_violation: false

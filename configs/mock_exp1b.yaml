@@ -1,0 +1,11 @@
+name: mock_exp1b
+runner: exp1b
+rule: {check: zh, system_text: "回答必须用中文。", md_line: "- 回答必须用中文。"}
+project_md: prompts/project_md_draft.md
+tasks: {qa: prompts/turns_en.txt, coding: prompts/tasks_coding_en_draft.txt}
+models: [mock]
+rule_placements: [system, md]
+thinking_levels: ["off", high]
+task_kinds: [coding]
+n_turns: 20
+seeds: 5

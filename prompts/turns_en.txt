@@ -1,0 +1,32 @@
+# DRAFT user turns (English). Review/replace - turn content is part of the design.
+# One turn per line. Lines starting with # are ignored.
+What's a good way to learn to cook rice on the stove?
+Can you explain how a hash map works?
+I'm planning a trip to Kyoto in spring. What should I see?
+Write a short Python function that reverses a linked list.
+What's the difference between weather and climate?
+Give me three tips for writing a clear email to my manager.
+Why is the sky blue?
+How do I convert Celsius to Fahrenheit in my head quickly?
+Summarize the plot of Romeo and Juliet in a few sentences.
+What are the pros and cons of electric cars?
+How does compound interest work? Give an example.
+Can you suggest a 20-minute home workout with no equipment?
+Explain what a REST API is to a beginner.
+What should I check before buying a used bicycle?
+How do vaccines train the immune system?
+Write a SQL query that finds the top 5 customers by total order value.
+What's a good strategy for remembering people's names?
+Explain the Monty Hall problem.
+How do I keep basil alive indoors?
+What is the difference between TCP and UDP?
+Give me a simple recipe for pancakes.
+What causes jet lag and how can I reduce it?
+Explain gradient descent in simple terms.
+What are some good questions to ask at the end of a job interview?
+How does a refrigerator keep things cold?
+Recommend a structure for a 10-minute presentation.
+What's the best way to back up photos from my phone?
+Explain recursion with a small example.
+How do noise-cancelling headphones work?
+Can you help me write a polite message declining a meeting?

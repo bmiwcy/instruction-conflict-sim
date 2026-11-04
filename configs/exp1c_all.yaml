@@ -1,0 +1,4 @@
+# Analysis only: all exp1c results together (Haiku main + control + top-up, larger models).
+name: exp1c_haiku
+runner: exp1c
+analyze_with: [results/exp1c_haiku_mdsys.jsonl, results/exp1c_big.jsonl, results/exp1c_fable.jsonl]

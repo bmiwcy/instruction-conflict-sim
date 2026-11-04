@@ -1,0 +1,16 @@
+# Pilot: small run to check cost, latency and that the detector agrees with eyeballing.
+name: exp1_pilot
+rule:
+  text: "无论我用什么语言提问，你都必须只用中文回答。"
+  check: zh
+models: [claude-haiku-5-5]
+rule_placements: [system, first_user]
+user_langs: [en]
+user_turns: {en: prompts/turns_en.txt}
+n_turns: 30
+seeds: 1
+
+max_tokens: 600
+shuffle_turns: true
+stop_at_first_violation: false
+base_system: null

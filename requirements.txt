@@ -1,0 +1,6 @@
+anthropic>=2.4.0
+python-dotenv
+pyyaml
+matplotlib
+numpy
+pytest

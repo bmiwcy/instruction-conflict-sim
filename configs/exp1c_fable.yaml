@@ -1,0 +1,18 @@
+# Exp 1c on larger models: 25 tool steps, no audience sentence, three cells, 10 runs each.
+name: exp1c_fable
+runner: exp1c
+scenario: prompts/exp1c_scenario.yaml
+rule:
+  check: zh
+  system_text: "回答必须用中文。"
+  md_line: "- 回答必须用中文。"
+models: [claude-fable-5-1]
+rule_conds: [none]            # first cell only; the rest after checking the measured cost
+audience: ["no"]
+n_tools: [25]
+seeds_by_n: {25: 10}
+thinking_level: default      # adaptive thinking at each model's default effort, summary returned
+empty_retries: 0             # final report not measured
+max_tokens: 32000
+cache: true
+workers: 6
